@@ -1,11 +1,32 @@
-<div align="center">
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+# 🍔 SnackFlow - Sistema de Lanchonete Inteligente
 
-  <h1>Built with AI Studio</h2>
+O **SnackFlow** é uma solução completa para gestão de lanchonetes, unindo um cardápio digital para clientes e um sistema de gerenciamento de cozinha (KDS).
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## 🚀 Tecnologias
+- **Frontend:** React + Tailwind CSS
+- **Backend:** [PocketBase](https://pocketbase.io/)
+- **Infra:** Docker & Docker Compose
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## 🛠️ Como rodar o projeto (Sincronizado)
 
-</div>
+Para subir o ambiente completo (Frontend + Banco de Dados) com as credenciais configuradas:
+
+1.  **Certifique-se de ter o Docker instalado.**
+2.  **Suba os containers:**
+    ```bash
+    docker-compose up -d --build
+    ```
+3.  **Acesse o sistema:**
+    -   **Frontend:** `http://localhost`
+    -   **Admin PocketBase:** `http://localhost:8090/_/`
+
+## 🔑 Credenciais de Administrador (Padrão)
+Se você não configurou o arquivo `.env`, o sistema usará:
+- **Usuário:** `salvador@localhost.com`
+- **Senha:** `12345678`
+
+## 📦 Estrutura
+- `pb_data/`: Dados persistentes do banco de dados.
+- `pb_public/`: Arquivos estáticos servidos pelo PocketBase (se necessário).
+- `dist/`: Build final do frontend.

@@ -1,0 +1,35 @@
+{
+  "name": "snackflow",
+  "private": true,
+  "version": "1.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "release:patch": "node scripts/bump-version.js patch",
+    "release:minor": "node scripts/bump-version.js minor",
+    "release:major": "node scripts/bump-version.js major",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview",
+    "sync": "git pull && docker compose -f docker/docker-compose.yml restart"
+  },
+  "dependencies": {
+    "date-fns": "^4.1.0",
+    "framer-motion": "^11.11.17",
+    "lucide-react": "^0.475.0",
+    "pocketbase": "^0.26.5",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.1",
+    "terser": "^5.30.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.2.0"
+  }
+}

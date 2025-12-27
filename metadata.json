@@ -1,0 +1,5 @@
+{
+  "name": "SnackFlow - Gestão de Lanchonete",
+  "description": "Sistema completo para lanchonetes com cardápio digital para clientes e painel de controle (KDS) para o proprietário, integrado com PocketBase.",
+  "requestFramePermissions": []
+}
