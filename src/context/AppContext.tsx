@@ -118,7 +118,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       user,
-      isAdmin: !!user && pb.authStore.isAdmin,
+      isAdmin: !!user && pb.authStore.isSuperuser,
       isInitializing,
       setupRequired,
       groups,

@@ -31,6 +31,10 @@ const getPBUrl = () => {
 
 const pb = new PocketBase(getPBUrl());
 
+// Desativa o cancelamento automático de requisições duplicadas
+// Isso evita erros "The request was autocancelled" em ambientes React com StrictMode
+pb.autoCancellation(false);
+
 export const login = async (email: string, pass: string) => {
   return await pb.collection('users').authWithPassword(email, pass);
 };

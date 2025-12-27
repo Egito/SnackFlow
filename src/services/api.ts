@@ -134,61 +134,70 @@ export const bootstrapSystem = async (): Promise<BootstrapResult> => {
 
   try {
     // 1. Verificação de Saúde: Tenta ler 'groups'.
-    const count = await pb.collection('groups').getList(1, 1);
-    if (count.totalItems > 0) return { status: 'already_setup' }; // Sistema já populado.
+    try {
+        const count = await pb.collection('groups').getList(1, 1);
+        if (count.totalItems > 0) return { status: 'already_setup' }; // Sistema já populado.
+    } catch (e: any) {
+        if (e.status !== 404) throw e;
+        // Se 404, continua para criação de schema
+    }
     
-    // Se tabela existe mas vazia, tenta popular
-    if (!pb.authStore.isValid || !pb.authStore.isAdmin) {
-       console.log(`🛠️ Tabelas vazias. Tentando autenticação automática...`);
+    // Se chegou aqui, ou a tabela groups não existe (404) ou está vazia (mas existe).
+    
+    // Verifica se temos acesso Superuser
+    if (!pb.authStore.isValid || !pb.authStore.isSuperuser) {
+       console.log(`🛠️ Verificando permissões administrativas...`);
        try {
          await pb.admins.authWithPassword(DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASS);
          performedAutoLogin = true;
        } catch (authError) {
-         // Se falhar auth aqui, continuamos para tentar popular se formos admin, senão paramos.
+         // Se falhar auth, não podemos criar schemas.
+         // Se o erro for 404 na auth, é porque nenhum admin existe ainda (instalação zerada).
        }
     }
     
-    if (pb.authStore.isAdmin) {
-      await populateData();
-      return { status: 'success', message: "Sistema populado com dados de exemplo." };
-    }
-
-    return { status: 'already_setup' }; // Fallback seguro
-
-  } catch (e: any) {
-    if (e.status === 404) {
-      console.log(`🛠️ Instalação Limpa Detectada (Erro 404 - Tabelas ausentes). Iniciando setup...`);
-      
+    if (pb.authStore.isSuperuser) {
       try {
-        // 3. Autentica como Super Admin para criar Schema (Tabelas)
-        console.log("🔑 Tentando autenticação administrativa...");
-        
-        // Se já estiver logado como admin, não precisa relogar
-        if (!pb.authStore.isAdmin) {
-           await pb.admins.authWithPassword(DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASS);
-           performedAutoLogin = true;
+        // Tenta buscar novamente para ter certeza se cria ou popula
+        try {
+            await pb.collection('groups').getList(1,1);
+            // Se não deu erro, a tabela existe. Popula.
+            await populateData();
+        } catch (e: any) {
+            if (e.status === 404) {
+                 // Tabela não existe. Cria Schema completo.
+                 await createSchema();
+                 await createInitialUser();
+                 await populateData();
+            } else {
+                throw e;
+            }
         }
-
-        await createSchema();
-        await createInitialUser();
-        await populateData();
-        
-        return { status: 'success', message: "Instalação concluída! Tabelas, usuário e dados criados." };
+        return { status: 'success', message: "Sistema configurado com sucesso." };
       } catch (err: any) {
-        console.error("❌ Falha crítica na instalação:", err.message);
-        
-        if (err.status === 400 || err.status === 403) {
-           // O usuário Admin não existe e não pode ser criado via API.
-           return { 
-             status: 'manual_setup', 
-             message: "Ação Necessária: Crie o usuário Admin no painel do PocketBase." 
-           };
-        }
-
-        return { status: 'error', message: "Erro crítico na instalação. Verifique o console." };
+        console.error("❌ Erro durante o bootstrap:", err);
+        return { status: 'error', message: err.message };
       }
     }
-    
+
+    // Se chegou aqui, não é admin e a tabela deu 404 ou vazia.
+    // Verificamos se foi um 404 original que desencadeou isso
+    try {
+        await pb.collection('groups').getList(1, 1);
+    } catch (e: any) {
+        if (e.status === 404) {
+             // 404 E não conseguimos logar como admin
+             return { 
+                status: 'manual_setup', 
+                message: "Ação Necessária: Crie o usuário Admin no painel do PocketBase." 
+             };
+        }
+    }
+
+    return { status: 'already_setup' }; 
+
+  } catch (e: any) {
+    console.error("Erro inesperado no bootstrap:", e);
     return { status: 'error', message: e.message };
   } finally {
     if (performedAutoLogin) {
@@ -200,64 +209,75 @@ export const bootstrapSystem = async (): Promise<BootstrapResult> => {
 const createSchema = async () => {
   console.log("🏗️ Criando tabelas (Schema)...");
   
-  await pb.collections.create({
-    name: 'groups',
-    type: 'base',
-    schema: [
-      { name: 'name', type: 'text', required: true },
-      { name: 'icon', type: 'text' }
-    ],
-    listRule: '',
-    viewRule: '',
-  });
+  // Regras vazias ('') significam Público no PocketBase
+  // null significaria Apenas Admin
 
-  await pb.collections.create({
-    name: 'categories',
-    type: 'base',
-    schema: [
-      { name: 'name', type: 'text', required: true },
-      { name: 'icon', type: 'text' },
-      { name: 'order', type: 'number' },
-      { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: true } }
-    ],
-    listRule: '',
-    viewRule: '',
-  });
+  try {
+    await pb.collections.create({
+        name: 'groups',
+        type: 'base',
+        schema: [
+        { name: 'name', type: 'text', required: true },
+        { name: 'icon', type: 'text' }
+        ],
+        listRule: '',
+        viewRule: '',
+    });
+  } catch (e) { console.log("Info: Groups collection might already exist"); }
 
-  await pb.collections.create({
-    name: 'products',
-    type: 'base',
-    schema: [
-      { name: 'name', type: 'text', required: true },
-      { name: 'description', type: 'text' },
-      { name: 'price', type: 'number', required: true },
-      { name: 'images', type: 'json' }, 
-      { name: 'active', type: 'bool' },
-      { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: false } },
-      { name: 'category', type: 'relation', required: true, options: { collectionId: 'categories', cascadeDelete: false } }
-    ],
-    listRule: '',
-    viewRule: '',
-  });
+  try {
+    await pb.collections.create({
+        name: 'categories',
+        type: 'base',
+        schema: [
+        { name: 'name', type: 'text', required: true },
+        { name: 'icon', type: 'text' },
+        { name: 'order', type: 'number' },
+        { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: true } }
+        ],
+        listRule: '',
+        viewRule: '',
+    });
+  } catch (e) { console.log("Info: Categories collection might already exist"); }
 
-  await pb.collections.create({
-    name: 'orders',
-    type: 'base',
-    schema: [
-      { name: 'customer_name', type: 'text', required: true },
-      { name: 'status', type: 'select', options: { values: ['pending', 'preparing', 'ready', 'delivered', 'cancelled'] } },
-      { name: 'total', type: 'number' },
-      { name: 'items', type: 'json' },
-      { name: 'payment_method', type: 'text' },
-      { name: 'received_amount', type: 'number' },
-      { name: 'change_amount', type: 'number' },
-      { name: 'is_paid', type: 'bool' }
-    ],
-    listRule: '', 
-    viewRule: '',
-    createRule: '', 
-    updateRule: '', 
-  });
+  try {
+    await pb.collections.create({
+        name: 'products',
+        type: 'base',
+        schema: [
+        { name: 'name', type: 'text', required: true },
+        { name: 'description', type: 'text' },
+        { name: 'price', type: 'number', required: true },
+        { name: 'images', type: 'json' }, 
+        { name: 'active', type: 'bool' },
+        { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: false } },
+        { name: 'category', type: 'relation', required: true, options: { collectionId: 'categories', cascadeDelete: false } }
+        ],
+        listRule: '',
+        viewRule: '',
+    });
+  } catch (e) { console.log("Info: Products collection might already exist"); }
+
+  try {
+    await pb.collections.create({
+        name: 'orders',
+        type: 'base',
+        schema: [
+        { name: 'customer_name', type: 'text', required: true },
+        { name: 'status', type: 'select', options: { values: ['pending', 'preparing', 'ready', 'delivered', 'cancelled'] } },
+        { name: 'total', type: 'number' },
+        { name: 'items', type: 'json' },
+        { name: 'payment_method', type: 'text' },
+        { name: 'received_amount', type: 'number' },
+        { name: 'change_amount', type: 'number' },
+        { name: 'is_paid', type: 'bool' }
+        ],
+        listRule: '', 
+        viewRule: '',
+        createRule: '', 
+        updateRule: '', 
+    });
+  } catch (e) { console.log("Info: Orders collection might already exist"); }
 };
 
 const createInitialUser = async () => {
@@ -274,12 +294,16 @@ const createInitialUser = async () => {
       console.log("✅ Usuário proprietário criado.");
     }
   } catch (e) {
-    console.warn("⚠️ Não foi possível criar o usuário inicial:", e);
+    console.warn("⚠️ Não foi possível criar o usuário inicial (pode já existir ou erro de permissão):", e);
   }
 };
 
 const populateData = async () => {
   console.log("🌱 Inserindo dados do cardápio...");
+  // Verifica se já tem dados para não duplicar
+  const check = await pb.collection('groups').getList(1, 1);
+  if (check.totalItems > 0) return;
+
   for (const groupData of INITIAL_DATA) {
     try {
         const group = await pb.collection('groups').create(groupData.group);
@@ -302,7 +326,7 @@ const populateData = async () => {
           }
         }
     } catch(e) {
-        console.log("Erro ao popular (pode já existir):", e);
+        console.log("Erro ao popular:", e);
     }
   }
 };
