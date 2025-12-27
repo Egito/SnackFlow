@@ -53,6 +53,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const refreshData = useCallback(async () => {
+    // Se o setup for necessário, não tenta buscar dados para evitar erros 404
+    if (setupRequired) return;
+
     try {
       const [g, c, p] = await Promise.all([
         api.menu.getGroups().catch(() => []),
@@ -68,15 +71,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.error("Erro ao atualizar dados:", e);
     }
-  }, []);
+  }, [setupRequired]);
 
   // Listener de Auth
   useEffect(() => {
     return pb.authStore.onChange((token, model) => {
       setUser(model);
-      refreshData();
+      // Só atualiza dados se não estiver em modo de setup
+      if (!setupRequired) refreshData();
     });
-  }, [refreshData]);
+  }, [refreshData, setupRequired]);
 
   // Inicialização e Bootstrap
   useEffect(() => {
@@ -86,8 +90,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Verifica se precisa de setup inicial
         const status = await bootstrapSystem();
         if (status.status === 'manual_setup') {
+          console.log("⚠️ Setup manual necessário: Usuário admin ainda não existe.");
           setSetupRequired(true);
         } else {
+          setSetupRequired(false);
           await refreshData();
         }
       } catch (e) {
@@ -97,19 +103,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
     init();
-  }, [refreshData]);
+  }, []); // Remove refreshData das dependências para evitar loops
 
   // Real-time subscriptions
   useEffect(() => {
-    // Subscreve a mudanças nos pedidos para atualizar o KDS em tempo real
-    api.orders.subscribe(() => {
-        api.orders.getActiveOrders().then(setOrders).catch(() => {});
-    });
+    // Não subscreve se estiver inicializando ou precisando de setup
+    if (isInitializing || setupRequired) return;
+
+    try {
+      // Subscreve a mudanças nos pedidos para atualizar o KDS em tempo real
+      api.orders.subscribe(() => {
+          api.orders.getActiveOrders().then(setOrders).catch(() => {});
+      });
+    } catch (err) {
+      console.warn("Erro ao conectar realtime (pode ser ignorado no setup):", err);
+    }
 
     return () => {
-        api.orders.unsubscribe();
+       try { api.orders.unsubscribe(); } catch(e) {}
     };
-  }, []);
+  }, [isInitializing, setupRequired]);
 
   const logout = () => {
     pbLogout();

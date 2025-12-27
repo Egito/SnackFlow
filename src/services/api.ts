@@ -4,7 +4,8 @@ import { Category, Product, Order, OrderStatus, Group } from '../types';
 
 // Credenciais de instalação (Bootstrap) e Superusuário Padrão
 export const DEFAULT_ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'salvador@localhost.com';
-export const DEFAULT_ADMIN_PASS = import.meta.env.VITE_ADMIN_PASS || '12345678';
+// Aumentando a complexidade da senha para evitar erros de validação do PocketBase
+export const DEFAULT_ADMIN_PASS = import.meta.env.VITE_ADMIN_PASS || 'SnackFlow2024!';
 
 // Helper para limpar campos de sistema do PocketBase antes de salvar
 const cleanData = (data: any) => {
@@ -135,23 +136,26 @@ export const bootstrapSystem = async (): Promise<BootstrapResult> => {
   bootPb.autoCancellation(false);
 
   try {
-    // 1. Verificação de Saúde (pública)
+    // 1. Verificação de Saúde (pública) - Tenta ler tabela groups
     try {
-        const count = await pb.collection('groups').getList(1, 1);
+        const count = await bootPb.collection('groups').getList(1, 1);
         if (count.totalItems > 0) return { status: 'already_setup' };
     } catch (e: any) {
-        if (e.status !== 404 && e.status !== 400) throw e;
-        // 404 ou 400 indica que provavelmente não existe tabela ou schema
+        // Se 404, significa que a tabela não existe, então precisamos instalar.
+        // Se 400 ou outro erro, assumimos que algo está errado com o schema.
     }
     
-    // Tenta autenticar a instância isolada de bootstrap
+    // 2. Tentativa de Login Administrativo Automático
     try {
+        console.log(`🔑 Tentando logar com credenciais embutidas: ${DEFAULT_ADMIN_EMAIL}`);
         await bootPb.admins.authWithPassword(DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASS);
     } catch (e) {
-        // Se não conseguir logar no bootPb e o usuário principal (pb) também não for admin
+        // Se falhar aqui, é porque o usuário admin com essas credenciais NÃO EXISTE no banco.
+        console.warn("⚠️ Login automático falhou. O usuário admin provavelmente ainda não foi criado no banco de dados.");
+        console.warn("ℹ️ O PocketBase não permite criar o primeiro admin via API por segurança.");
+        
+        // Se o usuário principal (pb) também não for admin, precisamos de setup manual
         if (!pb.authStore.isSuperuser) {
-             // Admin não existe ou senha errada.
-             // Como deu erro na leitura pública (passo 1), assumimos que precisa de setup manual se não conseguimos logar.
              return { status: 'manual_setup', message: "Admin user not found." };
         }
     }
@@ -164,13 +168,13 @@ export const bootstrapSystem = async (): Promise<BootstrapResult> => {
     }
 
     try {
-        // Verifica novamente com privilégios
+        // Verifica novamente com privilégios e cria tabelas se necessário
         try {
             await client.collection('groups').getList(1,1);
-            // Se existe, popula
+            // Se tabela existe, popula dados
             await populateData(client);
         } catch (e: any) {
-            // Se não existe, cria tudo
+            // Se deu erro (404), tabela não existe. Cria Schema.
             await createSchema(client);
             await createInitialUser(client);
             await populateData(client);
@@ -188,7 +192,7 @@ export const bootstrapSystem = async (): Promise<BootstrapResult> => {
   }
 };
 
-// Funções agora aceitam o cliente PB como argumento
+// ... Funções createSchema, createInitialUser, populateData permanecem iguais ...
 const createSchema = async (client: PocketBase) => {
   console.log("🏗️ Criando tabelas (Schema)...");
   
@@ -196,7 +200,6 @@ const createSchema = async (client: PocketBase) => {
       try {
           await client.collections.create(collection);
       } catch (e: any) {
-          // Ignora se já existe
           if (e.status !== 400) console.log(`Info: ${collection.name} check skipped.`);
       }
   };
@@ -258,7 +261,6 @@ const createSchema = async (client: PocketBase) => {
 const createInitialUser = async (client: PocketBase) => {
   console.log("👤 Criando usuário proprietário padrão...");
   try {
-    // Tenta encontrar pelo email
     const existing = await client.collection('users').getList(1, 1, { filter: `email = "${DEFAULT_ADMIN_EMAIL}"` });
     if (existing.totalItems === 0) {
       await client.collection('users').create({
@@ -269,8 +271,9 @@ const createInitialUser = async (client: PocketBase) => {
       });
       console.log("✅ Usuário proprietário criado.");
     }
-  } catch (e) {
-    // Silencia erros, pois o usuário pode já existir ou ser o próprio admin
+  } catch (e: any) {
+    console.error("❌ ERRO CRÍTICO AO CRIAR USUÁRIO:", e);
+    if (e.data) console.error("Detalhes do erro:", JSON.stringify(e.data, null, 2));
   }
 };
 
@@ -282,7 +285,6 @@ const populateData = async (client: PocketBase) => {
   for (const groupData of INITIAL_DATA) {
     try {
         const group = await client.collection('groups').create(groupData.group);
-        
         for (const catData of groupData.categories) {
           const category = await client.collection('categories').create({
             name: catData.name,
@@ -290,7 +292,6 @@ const populateData = async (client: PocketBase) => {
             order: catData.order,
             group: group.id
           });
-
           for (const prodData of catData.products) {
             await client.collection('products').create({
               ...prodData,
