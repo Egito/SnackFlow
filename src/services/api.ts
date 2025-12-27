@@ -1,8 +1,8 @@
-import pb from './pocketbase';
+import PocketBase from 'pocketbase';
+import pb, { getPBUrl } from './pocketbase';
 import { Category, Product, Order, OrderStatus, Group } from '../types';
 
 // Credenciais de instalação (Bootstrap) e Superusuário Padrão
-// Estas credenciais são usadas para criar o Admin inicial e o usuário Proprietário
 export const DEFAULT_ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'salvador@localhost.com';
 export const DEFAULT_ADMIN_PASS = import.meta.env.VITE_ADMIN_PASS || '12345678';
 
@@ -130,162 +130,138 @@ export interface BootstrapResult {
 
 // Função principal de instalação automática
 export const bootstrapSystem = async (): Promise<BootstrapResult> => {
-  let performedAutoLogin = false;
+  // Cria uma instância isolada para bootstrap para NÃO disparar eventos de auth globais na UI
+  const bootPb = new PocketBase(getPBUrl());
+  bootPb.autoCancellation(false);
 
   try {
-    // 1. Verificação de Saúde: Tenta ler 'groups'.
+    // 1. Verificação de Saúde (pública)
     try {
         const count = await pb.collection('groups').getList(1, 1);
-        if (count.totalItems > 0) return { status: 'already_setup' }; // Sistema já populado.
+        if (count.totalItems > 0) return { status: 'already_setup' };
     } catch (e: any) {
-        if (e.status !== 404) throw e;
-        // Se 404, continua para criação de schema
+        if (e.status !== 404 && e.status !== 400) throw e;
+        // 404 ou 400 indica que provavelmente não existe tabela ou schema
     }
     
-    // Se chegou aqui, ou a tabela groups não existe (404) ou está vazia (mas existe).
-    
-    // Verifica se temos acesso Superuser
-    if (!pb.authStore.isValid || !pb.authStore.isSuperuser) {
-       console.log(`🛠️ Verificando permissões administrativas...`);
-       try {
-         await pb.admins.authWithPassword(DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASS);
-         performedAutoLogin = true;
-       } catch (authError) {
-         // Se falhar auth, não podemos criar schemas.
-         // Se o erro for 404 na auth, é porque nenhum admin existe ainda (instalação zerada).
-       }
-    }
-    
-    if (pb.authStore.isSuperuser) {
-      try {
-        // Tenta buscar novamente para ter certeza se cria ou popula
-        try {
-            await pb.collection('groups').getList(1,1);
-            // Se não deu erro, a tabela existe. Popula.
-            await populateData();
-        } catch (e: any) {
-            if (e.status === 404) {
-                 // Tabela não existe. Cria Schema completo.
-                 await createSchema();
-                 await createInitialUser();
-                 await populateData();
-            } else {
-                throw e;
-            }
+    // Tenta autenticar a instância isolada de bootstrap
+    try {
+        await bootPb.admins.authWithPassword(DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASS);
+    } catch (e) {
+        // Se não conseguir logar no bootPb e o usuário principal (pb) também não for admin
+        if (!pb.authStore.isSuperuser) {
+             // Admin não existe ou senha errada.
+             // Como deu erro na leitura pública (passo 1), assumimos que precisa de setup manual se não conseguimos logar.
+             return { status: 'manual_setup', message: "Admin user not found." };
         }
+    }
+
+    // Decide qual cliente usar: o isolado (bootPb) ou o principal (pb) se o usuário já estiver logado nele
+    const client = bootPb.authStore.isSuperuser ? bootPb : (pb.authStore.isSuperuser ? pb : null);
+
+    if (!client) {
+         return { status: 'manual_setup' };
+    }
+
+    try {
+        // Verifica novamente com privilégios
+        try {
+            await client.collection('groups').getList(1,1);
+            // Se existe, popula
+            await populateData(client);
+        } catch (e: any) {
+            // Se não existe, cria tudo
+            await createSchema(client);
+            await createInitialUser(client);
+            await populateData(client);
+        }
+        
         return { status: 'success', message: "Sistema configurado com sucesso." };
-      } catch (err: any) {
+    } catch (err: any) {
         console.error("❌ Erro durante o bootstrap:", err);
         return { status: 'error', message: err.message };
-      }
     }
-
-    // Se chegou aqui, não é admin e a tabela deu 404 ou vazia.
-    // Verificamos se foi um 404 original que desencadeou isso
-    try {
-        await pb.collection('groups').getList(1, 1);
-    } catch (e: any) {
-        if (e.status === 404) {
-             // 404 E não conseguimos logar como admin
-             return { 
-                status: 'manual_setup', 
-                message: "Ação Necessária: Crie o usuário Admin no painel do PocketBase." 
-             };
-        }
-    }
-
-    return { status: 'already_setup' }; 
 
   } catch (e: any) {
     console.error("Erro inesperado no bootstrap:", e);
     return { status: 'error', message: e.message };
-  } finally {
-    if (performedAutoLogin) {
-      pb.authStore.clear();
-    }
   }
 };
 
-const createSchema = async () => {
+// Funções agora aceitam o cliente PB como argumento
+const createSchema = async (client: PocketBase) => {
   console.log("🏗️ Criando tabelas (Schema)...");
   
-  // Regras vazias ('') significam Público no PocketBase
-  // null significaria Apenas Admin
+  const safeCreate = async (collection: any) => {
+      try {
+          await client.collections.create(collection);
+      } catch (e: any) {
+          // Ignora se já existe
+          if (e.status !== 400) console.log(`Info: ${collection.name} check skipped.`);
+      }
+  };
 
-  try {
-    await pb.collections.create({
-        name: 'groups',
-        type: 'base',
-        schema: [
-        { name: 'name', type: 'text', required: true },
-        { name: 'icon', type: 'text' }
-        ],
-        listRule: '',
-        viewRule: '',
-    });
-  } catch (e) { console.log("Info: Groups collection might already exist"); }
+  await safeCreate({
+    name: 'groups',
+    type: 'base',
+    schema: [
+      { name: 'name', type: 'text', required: true },
+      { name: 'icon', type: 'text' }
+    ],
+    listRule: '', viewRule: '',
+  });
 
-  try {
-    await pb.collections.create({
-        name: 'categories',
-        type: 'base',
-        schema: [
-        { name: 'name', type: 'text', required: true },
-        { name: 'icon', type: 'text' },
-        { name: 'order', type: 'number' },
-        { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: true } }
-        ],
-        listRule: '',
-        viewRule: '',
-    });
-  } catch (e) { console.log("Info: Categories collection might already exist"); }
+  await safeCreate({
+    name: 'categories',
+    type: 'base',
+    schema: [
+      { name: 'name', type: 'text', required: true },
+      { name: 'icon', type: 'text' },
+      { name: 'order', type: 'number' },
+      { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: true } }
+    ],
+    listRule: '', viewRule: '',
+  });
 
-  try {
-    await pb.collections.create({
-        name: 'products',
-        type: 'base',
-        schema: [
-        { name: 'name', type: 'text', required: true },
-        { name: 'description', type: 'text' },
-        { name: 'price', type: 'number', required: true },
-        { name: 'images', type: 'json' }, 
-        { name: 'active', type: 'bool' },
-        { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: false } },
-        { name: 'category', type: 'relation', required: true, options: { collectionId: 'categories', cascadeDelete: false } }
-        ],
-        listRule: '',
-        viewRule: '',
-    });
-  } catch (e) { console.log("Info: Products collection might already exist"); }
+  await safeCreate({
+    name: 'products',
+    type: 'base',
+    schema: [
+      { name: 'name', type: 'text', required: true },
+      { name: 'description', type: 'text' },
+      { name: 'price', type: 'number', required: true },
+      { name: 'images', type: 'json' }, 
+      { name: 'active', type: 'bool' },
+      { name: 'group', type: 'relation', required: true, options: { collectionId: 'groups', cascadeDelete: false } },
+      { name: 'category', type: 'relation', required: true, options: { collectionId: 'categories', cascadeDelete: false } }
+    ],
+    listRule: '', viewRule: '',
+  });
 
-  try {
-    await pb.collections.create({
-        name: 'orders',
-        type: 'base',
-        schema: [
-        { name: 'customer_name', type: 'text', required: true },
-        { name: 'status', type: 'select', options: { values: ['pending', 'preparing', 'ready', 'delivered', 'cancelled'] } },
-        { name: 'total', type: 'number' },
-        { name: 'items', type: 'json' },
-        { name: 'payment_method', type: 'text' },
-        { name: 'received_amount', type: 'number' },
-        { name: 'change_amount', type: 'number' },
-        { name: 'is_paid', type: 'bool' }
-        ],
-        listRule: '', 
-        viewRule: '',
-        createRule: '', 
-        updateRule: '', 
-    });
-  } catch (e) { console.log("Info: Orders collection might already exist"); }
+  await safeCreate({
+    name: 'orders',
+    type: 'base',
+    schema: [
+      { name: 'customer_name', type: 'text', required: true },
+      { name: 'status', type: 'select', options: { values: ['pending', 'preparing', 'ready', 'delivered', 'cancelled'] } },
+      { name: 'total', type: 'number' },
+      { name: 'items', type: 'json' },
+      { name: 'payment_method', type: 'text' },
+      { name: 'received_amount', type: 'number' },
+      { name: 'change_amount', type: 'number' },
+      { name: 'is_paid', type: 'bool' }
+    ],
+    listRule: '', viewRule: '', createRule: '', updateRule: '', 
+  });
 };
 
-const createInitialUser = async () => {
+const createInitialUser = async (client: PocketBase) => {
   console.log("👤 Criando usuário proprietário padrão...");
   try {
-    const existing = await pb.collection('users').getList(1, 1, { filter: `email = "${DEFAULT_ADMIN_EMAIL}"` });
+    // Tenta encontrar pelo email
+    const existing = await client.collection('users').getList(1, 1, { filter: `email = "${DEFAULT_ADMIN_EMAIL}"` });
     if (existing.totalItems === 0) {
-      await pb.collection('users').create({
+      await client.collection('users').create({
         email: DEFAULT_ADMIN_EMAIL,
         password: DEFAULT_ADMIN_PASS,
         passwordConfirm: DEFAULT_ADMIN_PASS,
@@ -294,22 +270,21 @@ const createInitialUser = async () => {
       console.log("✅ Usuário proprietário criado.");
     }
   } catch (e) {
-    console.warn("⚠️ Não foi possível criar o usuário inicial (pode já existir ou erro de permissão):", e);
+    // Silencia erros, pois o usuário pode já existir ou ser o próprio admin
   }
 };
 
-const populateData = async () => {
+const populateData = async (client: PocketBase) => {
   console.log("🌱 Inserindo dados do cardápio...");
-  // Verifica se já tem dados para não duplicar
-  const check = await pb.collection('groups').getList(1, 1);
+  const check = await client.collection('groups').getList(1, 1);
   if (check.totalItems > 0) return;
 
   for (const groupData of INITIAL_DATA) {
     try {
-        const group = await pb.collection('groups').create(groupData.group);
+        const group = await client.collection('groups').create(groupData.group);
         
         for (const catData of groupData.categories) {
-          const category = await pb.collection('categories').create({
+          const category = await client.collection('categories').create({
             name: catData.name,
             icon: catData.icon,
             order: catData.order,
@@ -317,7 +292,7 @@ const populateData = async () => {
           });
 
           for (const prodData of catData.products) {
-            await pb.collection('products').create({
+            await client.collection('products').create({
               ...prodData,
               active: true,
               group: group.id,

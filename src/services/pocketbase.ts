@@ -6,7 +6,7 @@ import PocketBase from 'pocketbase';
  * 2. Tenta o hostname atual na porta 8090 (padrão do docker-compose)
  * 3. Fallback para localhost
  */
-const getPBUrl = () => {
+export const getPBUrl = () => {
   let envUrl = null;
   try {
     // Verifica se process e process.env existem antes de acessar

@@ -55,15 +55,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshData = useCallback(async () => {
     try {
       const [g, c, p] = await Promise.all([
-        api.menu.getGroups(),
-        api.menu.getCategories(),
-        api.menu.getProducts(),
+        api.menu.getGroups().catch(() => []),
+        api.menu.getCategories().catch(() => []),
+        api.menu.getProducts().catch(() => []),
       ]);
       setGroups(g);
       setCategories(c);
       setProducts(p);
 
-      const activeOrders = await api.orders.getActiveOrders();
+      const activeOrders = await api.orders.getActiveOrders().catch(() => []);
       setOrders(activeOrders);
     } catch (e) {
       console.error("Erro ao atualizar dados:", e);
@@ -103,7 +103,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     // Subscreve a mudanças nos pedidos para atualizar o KDS em tempo real
     api.orders.subscribe(() => {
-        api.orders.getActiveOrders().then(setOrders);
+        api.orders.getActiveOrders().then(setOrders).catch(() => {});
     });
 
     return () => {
