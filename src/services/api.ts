@@ -1,7 +1,8 @@
 import pb from './pocketbase';
 import { Category, Product, Order, OrderStatus, Group } from '../types';
 
-// Credenciais de instalação (Bootstrap)
+// Credenciais de instalação (Bootstrap) e Superusuário Padrão
+// Estas credenciais são usadas para criar o Admin inicial e o usuário Proprietário
 export const DEFAULT_ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'salvador@localhost.com';
 export const DEFAULT_ADMIN_PASS = import.meta.env.VITE_ADMIN_PASS || '12345678';
 
